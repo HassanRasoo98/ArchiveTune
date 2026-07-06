@@ -34,6 +34,7 @@ import kotlinx.coroutines.launch
 import moe.rukamori.archivetune.canvas.ArchiveTuneCanvas
 import moe.rukamori.archivetune.constants.*
 import moe.rukamori.archivetune.extensions.*
+import moe.rukamori.archivetune.gdrive.DriveSyncScheduler
 import moe.rukamori.archivetune.innertube.YouTube
 import moe.rukamori.archivetune.innertube.models.YouTubeLocale
 import moe.rukamori.archivetune.kugou.KuGou
@@ -151,6 +152,10 @@ class App :
                 }
 
                 LastFmServiceConfig.fromPreferences(prefs).apply(prefs[LastFMSessionKey])
+
+                if (BuildConfig.DISTRIBUTION == "gms" && prefs[DriveSyncEnabledKey] == true) {
+                    DriveSyncScheduler.schedulePeriodicSync(this@App, wifiOnly = prefs[DriveSyncWifiOnlyKey] != false)
+                }
 
                 ProxyUtils.applyYouTubeProxy(
                     enabled = prefs[ProxyEnabledKey] == true,

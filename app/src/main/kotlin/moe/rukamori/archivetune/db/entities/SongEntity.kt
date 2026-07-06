@@ -49,6 +49,10 @@ data class SongEntity(
     val isLocal: Boolean = false,
     @ColumnInfo(name = "localMediaStoreUri", defaultValue = "NULL")
     val localMediaStoreUri: String? = null,
+    @ColumnInfo(name = "driveFileId", defaultValue = "NULL")
+    val driveFileId: String? = null,
+    @ColumnInfo(name = "driveSyncedAt", defaultValue = "NULL")
+    val driveSyncedAt: LocalDateTime? = null,
 ) {
     fun localToggleLike() =
         copy(

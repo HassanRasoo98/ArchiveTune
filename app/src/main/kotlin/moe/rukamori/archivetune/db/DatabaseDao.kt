@@ -692,6 +692,10 @@ interface DatabaseDao {
     suspend fun getSongsByIds(songIds: List<String>): List<Song>
 
     @Transaction
+    @Query("SELECT * FROM song WHERE localMediaStoreUri IS NOT NULL AND driveFileId IS NULL")
+    suspend fun getSongsPendingDriveSync(): List<Song>
+
+    @Transaction
     @Query("SELECT * FROM song_artist_map WHERE songId = :songId")
     fun songArtistMap(songId: String): List<SongArtistMap>
 

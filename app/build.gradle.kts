@@ -290,6 +290,7 @@ dependencies {
     implementation("androidx.media3:media3-ui-compose:${libs.versions.media3.get()}")
     add("gmsImplementation", libs.media3.cast)
     add("gmsImplementation", libs.mediarouter)
+    add("gmsImplementation", libs.play.services.auth)
     implementation(libs.squigglyslider)
 
     implementation(libs.room.runtime)

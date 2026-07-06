@@ -26,6 +26,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.navigation.NavController
+import moe.rukamori.archivetune.BuildConfig
 import moe.rukamori.archivetune.LocalPlayerAwareWindowInsets
 import moe.rukamori.archivetune.R
 import moe.rukamori.archivetune.constants.ListenBrainzEnabledKey
@@ -83,6 +84,21 @@ fun IntegrationScreen(navController: NavController) {
                             navController.navigate("settings/discord")
                         },
                     )
+                }
+            }
+
+            if (BuildConfig.DISTRIBUTION == "gms") {
+                PreferenceGroup(title = stringResource(R.string.google_drive_sync)) {
+                    item {
+                        PreferenceEntry(
+                            title = { Text(stringResource(R.string.google_drive_sync)) },
+                            description = stringResource(R.string.google_drive_sync_description),
+                            icon = { Icon(painterResource(R.drawable.backup), null) },
+                            onClick = {
+                                navController.navigate("settings/drive_sync")
+                            },
+                        )
+                    }
                 }
             }
 

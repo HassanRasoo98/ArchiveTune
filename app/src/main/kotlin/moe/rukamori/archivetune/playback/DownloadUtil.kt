@@ -37,17 +37,22 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import moe.rukamori.archivetune.BuildConfig
 import moe.rukamori.archivetune.constants.AudioQuality
 import moe.rukamori.archivetune.constants.AudioQualityKey
+import moe.rukamori.archivetune.constants.DriveSyncEnabledKey
+import moe.rukamori.archivetune.constants.DriveSyncWifiOnlyKey
 import moe.rukamori.archivetune.db.MusicDatabase
 import moe.rukamori.archivetune.db.entities.FormatEntity
 import moe.rukamori.archivetune.db.entities.SongEntity
 import moe.rukamori.archivetune.di.DownloadCache
 import moe.rukamori.archivetune.di.PlayerCache
+import moe.rukamori.archivetune.gdrive.DriveSyncScheduler
 import moe.rukamori.archivetune.innertube.YouTube
 import moe.rukamori.archivetune.utils.AuthScopedCacheValue
 import moe.rukamori.archivetune.utils.StreamClientUtils
 import moe.rukamori.archivetune.utils.YTPlayerUtils
+import moe.rukamori.archivetune.utils.dataStore
 import moe.rukamori.archivetune.utils.enumPreference
 import moe.rukamori.archivetune.utils.get
 import moe.rukamori.archivetune.utils.isLowDataModeActive
@@ -352,6 +357,7 @@ class DownloadUtil
                             ),
                         )
                     }
+                    triggerDriveSyncIfEnabled()
                 }.onFailure { error ->
                     Timber.tag(LogTag).w(error, "Failed to export downloaded song %s to device storage", mediaId)
                 }
@@ -482,6 +488,13 @@ class DownloadUtil
 
         private fun sanitizeFileName(raw: String): String =
             raw.replace(Regex("[\\\\/:*?\"<>|]"), "_").trim().ifBlank { "song" }
+
+        private fun triggerDriveSyncIfEnabled() {
+            if (BuildConfig.DISTRIBUTION != "gms") return
+            if (appContext.dataStore[DriveSyncEnabledKey] != true) return
+            val wifiOnly = appContext.dataStore[DriveSyncWifiOnlyKey] != false
+            DriveSyncScheduler.enqueueImmediateSync(appContext, wifiOnly)
+        }
 
         companion object {
             private const val DEFAULT_MAX_PARALLEL_DOWNLOADS = 6

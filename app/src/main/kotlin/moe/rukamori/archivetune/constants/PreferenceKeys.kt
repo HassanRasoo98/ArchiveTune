@@ -192,6 +192,12 @@ val TogetherWelcomeShownKey = booleanPreferencesKey("together_welcome_shown")
 val ListenBrainzEnabledKey = booleanPreferencesKey("listenbrainz_enabled")
 val ListenBrainzTokenKey = stringPreferencesKey("listenbrainz_token")
 
+// Google Drive sync (gms flavor only)
+val DriveSyncEnabledKey = booleanPreferencesKey("drive_sync_enabled")
+val DriveSyncAccountEmailKey = stringPreferencesKey("drive_sync_account_email")
+val DriveSyncFolderIdKey = stringPreferencesKey("drive_sync_folder_id")
+val DriveSyncWifiOnlyKey = booleanPreferencesKey("drive_sync_wifi_only")
+
 val AiProviderKey = stringPreferencesKey("ai_provider")
 val AiCustomEndpointKey = stringPreferencesKey("ai_custom_endpoint")
 val AiApiKeyKey = stringPreferencesKey("ai_api_key")
