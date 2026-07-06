@@ -47,6 +47,8 @@ data class SongEntity(
     val dateDownload: LocalDateTime? = LocalDateTime.now(),
     @ColumnInfo(name = "isLocal", defaultValue = "0")
     val isLocal: Boolean = false,
+    @ColumnInfo(name = "localMediaStoreUri", defaultValue = "NULL")
+    val localMediaStoreUri: String? = null,
 ) {
     fun localToggleLike() =
         copy(

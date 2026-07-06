@@ -59,7 +59,7 @@ import java.util.concurrent.Executor
 import kotlin.coroutines.resume
 
 private const val TAG = "MusicDatabase"
-private const val CURRENT_VERSION = 32
+private const val CURRENT_VERSION = 33
 
 class MusicDatabase(
     private val delegate: InternalDatabase,
@@ -239,6 +239,7 @@ private class DatabaseCallback : RoomDatabase.Callback() {
 
                 cleanupDuplicatePlaylistsOnOpen(db)
                 ensurePlaylistBrowseIdIndex(db)
+                clearStaleDownloadFlags(db)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to set PRAGMA settings", e)
             }
@@ -302,6 +303,16 @@ private class DatabaseCallback : RoomDatabase.Callback() {
             db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_playlist_browseId ON playlist (browseId) WHERE browseId IS NOT NULL")
         } catch (e: Exception) {
             Log.w(TAG, "Failed to create browseId index", e)
+        }
+    }
+
+    // Downloads pre-dating the switch to real MediaStore files have no backing bytes anymore
+    // (the old ExoPlayer cache blob is retired) — stop claiming they're downloaded.
+    private fun clearStaleDownloadFlags(db: SupportSQLiteDatabase) {
+        try {
+            db.execSQL("UPDATE song SET dateDownload = NULL WHERE dateDownload IS NOT NULL AND localMediaStoreUri IS NULL")
+        } catch (e: Exception) {
+            Log.w(TAG, "Stale download flag cleanup skipped", e)
         }
     }
 }

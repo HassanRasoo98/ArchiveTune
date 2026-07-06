@@ -7,8 +7,11 @@
 
 package moe.rukamori.archivetune.playback
 
+import android.content.ContentValues
 import android.content.Context
 import android.net.ConnectivityManager
+import android.os.Environment
+import android.provider.MediaStore
 import androidx.core.content.getSystemService
 import androidx.core.net.toUri
 import androidx.media3.database.DatabaseProvider
@@ -28,10 +31,12 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import moe.rukamori.archivetune.constants.AudioQuality
 import moe.rukamori.archivetune.constants.AudioQualityKey
 import moe.rukamori.archivetune.db.MusicDatabase
@@ -49,6 +54,8 @@ import moe.rukamori.archivetune.utils.isLowDataModeActive
 import moe.rukamori.archivetune.utils.retryWithoutPlaybackLoginContext
 import okhttp3.ConnectionPool
 import okhttp3.OkHttpClient
+import timber.log.Timber
+import java.io.File
 import java.time.LocalDateTime
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
@@ -66,6 +73,7 @@ class DownloadUtil
         @DownloadCache val downloadCache: Cache,
         @PlayerCache val playerCache: Cache,
     ) {
+        private val appContext = context
         private val connectivityManager = context.getSystemService<ConnectivityManager>()!!
         private val audioQuality by enumPreference(context, AudioQualityKey, AudioQuality.AUTO)
         private val downloadScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -196,6 +204,16 @@ class DownloadUtil
                                     set(download.request.id, download)
                                 }
                             }
+                            if (download.state == Download.STATE_COMPLETED) {
+                                downloadScope.launch { exportDownloadedSongIfNeeded(download.request.id) }
+                            }
+                        }
+
+                        override fun onDownloadRemoved(
+                            downloadManager: DownloadManager,
+                            download: Download,
+                        ) {
+                            downloadScope.launch { clearExportedSong(download.request.id) }
                         }
                     },
                 )
@@ -209,6 +227,9 @@ class DownloadUtil
                     result[cursor.download.request.id] = cursor.download
                 }
                 downloads.value = result
+                result.values
+                    .filter { it.state == Download.STATE_COMPLETED }
+                    .forEach { download -> exportDownloadedSongIfNeeded(download.request.id) }
             }
             downloadScope.launch {
                 var previousFingerprint: String? = null
@@ -291,11 +312,184 @@ class DownloadUtil
             }
         }
 
+        /**
+         * Once a download finishes, copy the fully-cached bytes out of the opaque ExoPlayer
+         * cache into a real file in the public Music folder (via MediaStore), so the song is
+         * playable outside the app (Files app, other players) and syncable to Google Drive.
+         * [Song.toMediaItem]/[moe.rukamori.archivetune.models.MediaMetadata.toMediaItem] prefer
+         * this file for playback whenever it's present.
+         */
+        private suspend fun exportDownloadedSongIfNeeded(mediaId: String) {
+            withContext(Dispatchers.IO) {
+                runCatching {
+                    Timber.tag(LogTag).d("Export check starting for %s", mediaId)
+                    val existingSong = database.getSongByIdBlocking(mediaId)?.song
+                    if (existingSong == null) {
+                        Timber.tag(LogTag).w("Export skipped for %s: no SongEntity row yet", mediaId)
+                        return@runCatching
+                    }
+                    if (existingSong.localMediaStoreUri != null) {
+                        Timber.tag(LogTag).d("Export skipped for %s: already exported to %s", mediaId, existingSong.localMediaStoreUri)
+                        return@runCatching
+                    }
+                    val format = database.format(mediaId).first()
+                    if (format == null) {
+                        Timber.tag(LogTag).w("Export skipped for %s: no FormatEntity row yet", mediaId)
+                        return@runCatching
+                    }
+                    val uri = writeCachedSongToMediaStore(mediaId, existingSong.title, format)
+                    if (uri == null) {
+                        Timber.tag(LogTag).w("Export failed for %s: writeCachedSongToMediaStore returned null (see prior log line)", mediaId)
+                        return@runCatching
+                    }
+                    Timber.tag(LogTag).i("Exported %s to %s", mediaId, uri)
+                    database.query {
+                        val current = getSongByIdBlocking(mediaId)?.song ?: return@query
+                        upsert(
+                            current.copy(
+                                localMediaStoreUri = uri.toString(),
+                                dateDownload = current.dateDownload ?: LocalDateTime.now(),
+                            ),
+                        )
+                    }
+                }.onFailure { error ->
+                    Timber.tag(LogTag).w(error, "Failed to export downloaded song %s to device storage", mediaId)
+                }
+            }
+        }
+
+        private fun writeCachedSongToMediaStore(
+            mediaId: String,
+            title: String,
+            format: FormatEntity,
+        ): android.net.Uri? {
+            val spans = downloadCache.getCachedSpans(mediaId).sortedBy { it.position }
+            Timber.tag(LogTag).d(
+                "writeCachedSongToMediaStore(%s): %d cached span(s), contentLength=%d",
+                mediaId,
+                spans.size,
+                format.contentLength,
+            )
+            if (spans.isEmpty()) {
+                Timber.tag(LogTag).w("writeCachedSongToMediaStore(%s): no cached spans found in downloadCache", mediaId)
+                return null
+            }
+
+            val spanFiles = mutableListOf<File>()
+            var expectedPosition = 0L
+            for (span in spans) {
+                val file = span.file
+                if (file == null) {
+                    Timber.tag(LogTag).w("writeCachedSongToMediaStore(%s): span at %d has no backing file", mediaId, span.position)
+                    return null
+                }
+                if (span.position != expectedPosition) {
+                    Timber.tag(LogTag).w(
+                        "writeCachedSongToMediaStore(%s): gap in cache, expected position %d but span starts at %d",
+                        mediaId,
+                        expectedPosition,
+                        span.position,
+                    )
+                    return null
+                }
+                spanFiles += file
+                expectedPosition += span.length
+            }
+            if (format.contentLength > 0 && expectedPosition < format.contentLength) {
+                Timber.tag(LogTag).w(
+                    "writeCachedSongToMediaStore(%s): only %d of %d bytes cached",
+                    mediaId,
+                    expectedPosition,
+                    format.contentLength,
+                )
+                return null
+            }
+
+            val resolver = appContext.contentResolver
+            val fileName = sanitizeFileName(title)
+            var uri: android.net.Uri? = null
+            for ((extension, mimeType) in resolveAudioContainerCandidates(format.mimeType)) {
+                val values =
+                    ContentValues().apply {
+                        put(MediaStore.Audio.Media.DISPLAY_NAME, "$fileName.$extension")
+                        put(MediaStore.Audio.Media.MIME_TYPE, mimeType)
+                        put(MediaStore.Audio.Media.RELATIVE_PATH, "${Environment.DIRECTORY_MUSIC}/$DownloadFolderName")
+                        put(MediaStore.Audio.Media.IS_PENDING, 1)
+                    }
+                uri =
+                    runCatching { resolver.insert(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, values) }
+                        .onFailure { error ->
+                            Timber.tag(LogTag).w(error, "writeCachedSongToMediaStore(%s): insert with MIME %s rejected", mediaId, mimeType)
+                        }.getOrNull()
+                if (uri != null) {
+                    Timber.tag(LogTag).d("writeCachedSongToMediaStore(%s): accepted MIME %s", mediaId, mimeType)
+                    break
+                }
+            }
+            if (uri == null) {
+                Timber.tag(LogTag).w("writeCachedSongToMediaStore(%s): MediaStore rejected every candidate MIME type", mediaId)
+                return null
+            }
+
+            val writeResult =
+                runCatching {
+                    resolver.openOutputStream(uri)?.use { output ->
+                        spanFiles.forEach { file -> file.inputStream().use { it.copyTo(output) } }
+                    } ?: error("Unable to open MediaStore output stream for $uri")
+                }
+            if (writeResult.isFailure) {
+                Timber.tag(LogTag).w(writeResult.exceptionOrNull(), "writeCachedSongToMediaStore(%s): failed writing to %s", mediaId, uri)
+                runCatching { resolver.delete(uri, null, null) }
+                return null
+            }
+
+            val donePendingValues = ContentValues().apply { put(MediaStore.Audio.Media.IS_PENDING, 0) }
+            resolver.update(uri, donePendingValues, null, null)
+            return uri
+        }
+
+        private suspend fun clearExportedSong(mediaId: String) {
+            withContext(Dispatchers.IO) {
+                runCatching {
+                    val existingSong = database.getSongByIdBlocking(mediaId)?.song ?: return@runCatching
+                    val storedUri = existingSong.localMediaStoreUri ?: return@runCatching
+                    runCatching { appContext.contentResolver.delete(storedUri.toUri(), null, null) }
+                    database.query {
+                        val current = getSongByIdBlocking(mediaId)?.song ?: return@query
+                        upsert(current.copy(localMediaStoreUri = null, dateDownload = null))
+                    }
+                }.onFailure { error ->
+                    Timber.tag(LogTag).w(error, "Failed to clean up exported song for %s", mediaId)
+                }
+            }
+        }
+
+        /**
+         * MediaProvider's allow-list of MIME types it accepts for MediaStore.Audio.Media inserts
+         * varies by OS version/OEM and rejects some legitimate audio MIME types (e.g. "audio/webm"
+         * is refused by some MediaProvider builds despite being a real, IANA-registered type).
+         * Candidates are tried in order; the first one MediaProvider accepts is used.
+         */
+        private fun resolveAudioContainerCandidates(mimeType: String): List<Pair<String, String>> {
+            val normalized = mimeType.lowercase()
+            return when {
+                normalized.contains("webm") ->
+                    listOf("weba" to "audio/webm", "mka" to "audio/x-matroska", "opus" to "audio/opus")
+                normalized.contains("ogg") -> listOf("ogg" to "audio/ogg")
+                else -> listOf("m4a" to "audio/mp4")
+            }
+        }
+
+        private fun sanitizeFileName(raw: String): String =
+            raw.replace(Regex("[\\\\/:*?\"<>|]"), "_").trim().ifBlank { "song" }
+
         companion object {
             private const val DEFAULT_MAX_PARALLEL_DOWNLOADS = 6
             private const val MAX_IDLE_DOWNLOAD_CONNECTIONS = 12
             private const val MAX_DOWNLOAD_HTTP_REQUESTS = 24
             private const val DOWNLOAD_CONNECTION_KEEP_ALIVE_MINUTES = 5L
             private const val DOWNLOAD_WRITE_BUFFER_SIZE = 256 * 1024
+            private const val DownloadFolderName = "ArchiveTune"
+            private const val LogTag = "DownloadUtil"
         }
     }

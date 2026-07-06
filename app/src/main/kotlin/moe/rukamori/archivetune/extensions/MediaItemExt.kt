@@ -37,11 +37,24 @@ private fun MediaItem.Builder.setCacheKeyIfRemote(mediaId: String): MediaItem.Bu
     return this
 }
 
+/**
+ * When a downloaded copy exists as a real file in the public Music folder, play directly from
+ * it (a content:// URI) instead of resolving a YouTube stream — this is what makes downloaded
+ * songs play fully offline via MusicService's existing content://-scheme bypass.
+ */
+private fun MediaItem.Builder.setPlaybackUri(
+    mediaId: String,
+    localMediaStoreUri: String?,
+): MediaItem.Builder {
+    setUri(localMediaStoreUri ?: mediaId)
+    return this
+}
+
 fun Song.toMediaItem() =
     MediaItem
         .Builder()
         .setMediaId(song.id)
-        .setUri(song.id)
+        .setPlaybackUri(song.id, song.localMediaStoreUri)
         .setCacheKeyIfRemote(song.id)
         .setTag(toMediaMetadata())
         .setMediaMetadata(
@@ -88,7 +101,7 @@ fun MediaMetadata.toMediaItem() =
     MediaItem
         .Builder()
         .setMediaId(id)
-        .setUri(id)
+        .setPlaybackUri(id, localMediaStoreUri)
         .setCacheKeyIfRemote(id)
         .setTag(this)
         .setMediaMetadata(
