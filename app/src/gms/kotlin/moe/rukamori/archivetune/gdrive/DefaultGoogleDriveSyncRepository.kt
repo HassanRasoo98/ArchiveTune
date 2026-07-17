@@ -30,7 +30,6 @@ import kotlinx.coroutines.withContext
 import moe.rukamori.archivetune.constants.DriveSyncAccountEmailKey
 import moe.rukamori.archivetune.constants.DriveSyncFolderIdKey
 import moe.rukamori.archivetune.utils.dataStore
-import okhttp3.Headers
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
@@ -128,10 +127,8 @@ class DefaultGoogleDriveSyncRepository(
                         .Builder()
                         .setType("multipart/related".toMediaType())
                         .addPart(
-                            Headers.headersOf("Content-Type", "application/json; charset=UTF-8"),
-                            metadata.toString().toRequestBody(),
+                            metadata.toString().toRequestBody("application/json; charset=UTF-8".toMediaType()),
                         ).addPart(
-                            Headers.headersOf("Content-Type", mimeType),
                             bytes.toRequestBody(mimeType.toMediaType()),
                         ).build()
                 val request =
