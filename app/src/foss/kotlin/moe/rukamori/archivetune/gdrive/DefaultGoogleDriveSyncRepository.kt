@@ -31,6 +31,12 @@ class DefaultGoogleDriveSyncRepository(
         mimeType: String,
     ): Result<String> = Result.failure(UnsupportedOperationException(UnavailableMessage))
 
+    override suspend fun uploadBytes(
+        displayName: String,
+        mimeType: String,
+        bytes: ByteArray,
+    ): Result<String> = Result.failure(UnsupportedOperationException(UnavailableMessage))
+
     private fun unavailable() = DriveAuthorizationOutcome.Failed(UnavailableMessage)
 
     private companion object {

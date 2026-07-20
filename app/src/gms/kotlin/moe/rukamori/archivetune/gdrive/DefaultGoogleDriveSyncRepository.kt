@@ -111,43 +111,63 @@ class DefaultGoogleDriveSyncRepository(
     ): Result<String> =
         withContext(Dispatchers.IO) {
             runCatching {
-                val token = freshAccessToken() ?: error("Not authorized with Google Drive")
-                val folderId = ensureSyncFolder(token)
                 val bytes =
                     context.contentResolver.openInputStream(localFileUri)?.use { it.readBytes() }
                         ?: error("Unable to read $localFileUri")
-
-                val metadata =
-                    JSONObject().apply {
-                        put("name", displayName)
-                        put("parents", JSONArray().put(folderId))
-                    }
-                val body =
-                    MultipartBody
-                        .Builder()
-                        .setType("multipart/related".toMediaType())
-                        .addPart(
-                            metadata.toString().toRequestBody("application/json; charset=UTF-8".toMediaType()),
-                        ).addPart(
-                            bytes.toRequestBody(mimeType.toMediaType()),
-                        ).build()
-                val request =
-                    Request
-                        .Builder()
-                        .url("$DriveUploadUrl?uploadType=multipart&fields=id")
-                        .addHeader("Authorization", "Bearer $token")
-                        .post(body)
-                        .build()
-
-                httpClient.newCall(request).execute().use { response ->
-                    val responseBody = response.body?.string().orEmpty()
-                    if (!response.isSuccessful) error("Drive upload failed (${response.code}): $responseBody")
-                    JSONObject(responseBody).getString("id")
-                }
+                uploadBytesInternal(displayName, mimeType, bytes)
             }.onFailure { error ->
                 Timber.tag(LogTag).w(error, "uploadSong failed for %s", displayName)
             }
         }
+
+    override suspend fun uploadBytes(
+        displayName: String,
+        mimeType: String,
+        bytes: ByteArray,
+    ): Result<String> =
+        withContext(Dispatchers.IO) {
+            runCatching { uploadBytesInternal(displayName, mimeType, bytes) }
+                .onFailure { error ->
+                    Timber.tag(LogTag).w(error, "uploadBytes failed for %s", displayName)
+                }
+        }
+
+    private suspend fun uploadBytesInternal(
+        displayName: String,
+        mimeType: String,
+        bytes: ByteArray,
+    ): String {
+        val token = freshAccessToken() ?: error("Not authorized with Google Drive")
+        val folderId = ensureSyncFolder(token)
+
+        val metadata =
+            JSONObject().apply {
+                put("name", displayName)
+                put("parents", JSONArray().put(folderId))
+            }
+        val body =
+            MultipartBody
+                .Builder()
+                .setType("multipart/related".toMediaType())
+                .addPart(
+                    metadata.toString().toRequestBody("application/json; charset=UTF-8".toMediaType()),
+                ).addPart(
+                    bytes.toRequestBody(mimeType.toMediaType()),
+                ).build()
+        val request =
+            Request
+                .Builder()
+                .url("$DriveUploadUrl?uploadType=multipart&fields=id")
+                .addHeader("Authorization", "Bearer $token")
+                .post(body)
+                .build()
+
+        return httpClient.newCall(request).execute().use { response ->
+            val responseBody = response.body?.string().orEmpty()
+            if (!response.isSuccessful) error("Drive upload failed (${response.code}): $responseBody")
+            JSONObject(responseBody).getString("id")
+        }
+    }
 
     private fun handleAuthorizationResult(result: AuthorizationResult): DriveAuthorizationOutcome {
         val pendingIntent = result.pendingIntent

@@ -52,4 +52,11 @@ interface GoogleDriveSyncRepository {
         displayName: String,
         mimeType: String,
     ): Result<String>
+
+    /** Uploads arbitrary in-memory content (metadata JSON, thumbnails) alongside synced songs. */
+    suspend fun uploadBytes(
+        displayName: String,
+        mimeType: String,
+        bytes: ByteArray,
+    ): Result<String>
 }
